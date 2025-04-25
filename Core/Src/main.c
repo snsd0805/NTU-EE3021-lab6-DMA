@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "cmsis_os.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -53,6 +54,18 @@ UART_HandleTypeDef huart3;
 
 PCD_HandleTypeDef hpcd_USB_OTG_FS;
 
+/* Definitions for defaultTask */
+osThreadId_t defaultTaskHandle;
+const osThreadAttr_t defaultTask_attributes = {
+  .name = "defaultTask",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for myQueue01 */
+osMessageQueueId_t myQueue01Handle;
+const osMessageQueueAttr_t myQueue01_attributes = {
+  .name = "myQueue01"
+};
 /* USER CODE BEGIN PV */
 
 TIM_HandleTypeDef htim1;
@@ -74,6 +87,8 @@ static void MX_SPI3_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_USB_OTG_FS_PCD_Init(void);
+void StartDefaultTask(void *argument);
+
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -172,7 +187,7 @@ void ADC1_DMA1CH1_init()
     ADC1_Init();
 
     NVIC_SetVector(DMA1_Channel1_IRQn, (uint32_t)&DMA1_Channel1_IRQHandler);
-    HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 0, 0);
+    HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 6, 0);
     HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
 }
 
@@ -225,21 +240,15 @@ static void TIM1_Init(void)
 
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 {
-	//to do: inform RTOS task to print out sensor data
-	for (int i=SAMPLE_BUFFER_SIZE/2; i<SAMPLE_BUFFER_SIZE; i++) {
-		printf("%d ", sample_buffer[i]);
-	}
-	printf("\n");
+	uint16_t data = 1;
+	  osMessageQueuePut(myQueue01Handle, &data, 0, 0);
+
 }
 
 void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc)
 {
-    	//to do: inform RTOS task to print out sensor data
-	printf("HERE\n");
-	for (int i=0; i<SAMPLE_BUFFER_SIZE/2; i++) {
-		printf("%d ", sample_buffer[i]);
-	}
-	printf("\n");
+	uint16_t data = 0;
+  osMessageQueuePut(myQueue01Handle, &data, 0, 0);
 
 }
 
@@ -275,22 +284,63 @@ int main(void)
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
-//  MX_GPIO_Init();
-//  MX_DFSDM1_Init();
-//  MX_I2C2_Init();
-//  MX_QUADSPI_Init();
-//  MX_SPI3_Init();
+  MX_GPIO_Init();
+  MX_DFSDM1_Init();
+  MX_I2C2_Init();
+  MX_QUADSPI_Init();
+  MX_SPI3_Init();
   MX_USART1_UART_Init();
-//  MX_USART3_UART_Init();
-//  MX_USB_OTG_FS_PCD_Init();
+  MX_USART3_UART_Init();
+  MX_USB_OTG_FS_PCD_Init();
   /* USER CODE BEGIN 2 */
+
 
   TIM1_Init();
   ADC1_DMA1CH1_init();
 
+  /* USER CODE END 2 */
+
+  /* Init scheduler */
+  osKernelInitialize();
+
+  /* USER CODE BEGIN RTOS_MUTEX */
+  /* add mutexes, ... */
+  /* USER CODE END RTOS_MUTEX */
+
+  /* USER CODE BEGIN RTOS_SEMAPHORES */
+  /* add semaphores, ... */
+  /* USER CODE END RTOS_SEMAPHORES */
+
+  /* USER CODE BEGIN RTOS_TIMERS */
+  /* start timers, add new ones, ... */
+  /* USER CODE END RTOS_TIMERS */
+
+  /* Create the queue(s) */
+  /* creation of myQueue01 */
+  myQueue01Handle = osMessageQueueNew (16, sizeof(uint16_t), &myQueue01_attributes);
+
+  /* USER CODE BEGIN RTOS_QUEUES */
+  /* add queues, ... */
   HAL_ADC_Start_DMA(&hadc1, (uint32_t *)&sample_buffer[0], SAMPLE_BUFFER_SIZE );
   HAL_TIM_Base_Start_IT(&htim1);
-  /* USER CODE END 2 */
+  /* USER CODE END RTOS_QUEUES */
+
+  /* Create the thread(s) */
+  /* creation of defaultTask */
+  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+
+  /* USER CODE BEGIN RTOS_THREADS */
+  /* add threads, ... */
+  /* USER CODE END RTOS_THREADS */
+
+  /* USER CODE BEGIN RTOS_EVENTS */
+  /* add events, ... */
+  /* USER CODE END RTOS_EVENTS */
+
+  /* Start scheduler */
+  osKernelStart();
+
+  /* We should never get here as control is now taken by the scheduler */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
@@ -810,10 +860,10 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
+  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 5, 0);
   HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
 
-  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 0, 0);
+  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 5, 0);
   HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
@@ -824,6 +874,39 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 
 /* USER CODE END 4 */
+
+/* USER CODE BEGIN Header_StartDefaultTask */
+/**
+  * @brief  Function implementing the defaultTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartDefaultTask */
+void StartDefaultTask(void *argument)
+{
+  /* USER CODE BEGIN 5 */
+  /* Infinite loop */
+	uint16_t data;
+  for(;;)
+  {
+	  printf("Waiting\n");
+	  osMessageQueueGet(myQueue01Handle, &data, 0, osWaitForever);
+	  printf("data=%d\n", data);
+	  if (data == 0) {
+		for (int i=0; i<SAMPLE_BUFFER_SIZE/2; i++) {
+			printf("%d ", sample_buffer[i]);
+		}
+		printf("\n");
+	  } else {
+		for (int i=SAMPLE_BUFFER_SIZE/2; i<SAMPLE_BUFFER_SIZE; i++) {
+			printf("%d ", sample_buffer[i]);
+		}
+		printf("\n");
+	  }
+
+  }
+  /* USER CODE END 5 */
+}
 
 /**
   * @brief  This function is executed in case of error occurrence.
